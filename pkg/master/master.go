@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apiserver"
 	"k8s.io/kubernetes/pkg/genericapiserver"
@@ -37,6 +37,7 @@ import (
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/registry/componentstatus"
+	configmapetcd "k8s.io/kubernetes/pkg/registry/configmap/etcd"
 	controlleretcd "k8s.io/kubernetes/pkg/registry/controller/etcd"
 	deploymentetcd "k8s.io/kubernetes/pkg/registry/deployment/etcd"
 	"k8s.io/kubernetes/pkg/registry/endpoint"
@@ -178,7 +179,7 @@ func (m *Master) InstallAPIs(c *Config) {
 		// Install v1 API.
 		m.initV1ResourcesStorage(c)
 		apiGroupInfo := genericapiserver.APIGroupInfo{
-			GroupMeta: *latest.GroupOrDie(api.GroupName),
+			GroupMeta: *registered.GroupOrDie(api.GroupName),
 			VersionedResourcesStorageMap: map[string]map[string]rest.Storage{
 				"v1": m.v1ResourcesStorage,
 			},
@@ -198,7 +199,7 @@ func (m *Master) InstallAPIs(c *Config) {
 		m.thirdPartyResources = map[string]thirdPartyEntry{}
 
 		extensionResources := m.getExtensionResources(c)
-		extensionsGroupMeta := latest.GroupOrDie(extensions.GroupName)
+		extensionsGroupMeta := registered.GroupOrDie(extensions.GroupName)
 		// Update the prefered version as per StorageVersions in the config.
 		storageVersion, found := c.StorageVersions[extensionsGroupMeta.GroupVersion.Group]
 		if !found {
@@ -215,7 +216,7 @@ func (m *Master) InstallAPIs(c *Config) {
 			VersionedResourcesStorageMap: map[string]map[string]rest.Storage{
 				"v1beta1": extensionResources,
 			},
-			OptionsExternalVersion: &latest.GroupOrDie(api.GroupName).GroupVersion,
+			OptionsExternalVersion: &registered.GroupOrDie(api.GroupName).GroupVersion,
 		}
 		apiGroupsInfo = append(apiGroupsInfo, apiGroupInfo)
 
@@ -531,7 +532,7 @@ func (m *Master) thirdpartyapi(group, kind, version string) *apiserver.APIGroupV
 		strings.ToLower(kind) + "s": resourceStorage,
 	}
 
-	optionsExternalVersion := latest.GroupOrDie(api.GroupName).GroupVersion
+	optionsExternalVersion := registered.GroupOrDie(api.GroupName).GroupVersion
 
 	return &apiserver.APIGroupVersion{
 		Root:                apiRoot,
@@ -542,9 +543,9 @@ func (m *Master) thirdpartyapi(group, kind, version string) *apiserver.APIGroupV
 		Convertor: api.Scheme,
 		Typer:     api.Scheme,
 
-		Mapper:                 thirdpartyresourcedata.NewMapper(latest.GroupOrDie(extensions.GroupName).RESTMapper, kind, version, group),
-		Codec:                  thirdpartyresourcedata.NewCodec(latest.GroupOrDie(extensions.GroupName).Codec, kind),
-		Linker:                 latest.GroupOrDie(extensions.GroupName).SelfLinker,
+		Mapper:                 thirdpartyresourcedata.NewMapper(registered.GroupOrDie(extensions.GroupName).RESTMapper, kind, version, group),
+		Codec:                  thirdpartyresourcedata.NewCodec(registered.GroupOrDie(extensions.GroupName).Codec, kind),
+		Linker:                 registered.GroupOrDie(extensions.GroupName).SelfLinker,
 		Storage:                storage,
 		OptionsExternalVersion: &optionsExternalVersion,
 
@@ -557,7 +558,7 @@ func (m *Master) thirdpartyapi(group, kind, version string) *apiserver.APIGroupV
 // getExperimentalResources returns the resources for extenstions api
 func (m *Master) getExtensionResources(c *Config) map[string]rest.Storage {
 	// All resources except these are disabled by default.
-	enabledResources := sets.NewString("jobs", "horizontalpodautoscalers", "ingresses")
+	enabledResources := sets.NewString("jobs", "horizontalpodautoscalers", "ingresses", "configmaps")
 	resourceOverrides := m.ApiGroupVersionOverrides["extensions/v1beta1"].ResourceOverrides
 	isEnabled := func(resource string) bool {
 		// Check if the resource has been overriden.
@@ -619,6 +620,10 @@ func (m *Master) getExtensionResources(c *Config) map[string]rest.Storage {
 		storage["ingresses"] = ingressStorage
 		storage["ingresses/status"] = ingressStatusStorage
 	}
+	if isEnabled("configmaps") {
+		storage["configmaps"] = configmapetcd.NewREST(dbClient("configmaps"), storageDecorator)
+	}
+
 	return storage
 }
 
